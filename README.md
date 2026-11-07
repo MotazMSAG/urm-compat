@@ -1,22 +1,55 @@
 # URM Compat
 
-An add-on layer for **[Universal Ren'Py Mod (URM)](https://0x52.dev) by 0x52**.
+An add-on for **[Universal Ren'Py Mod (URM)](https://0x52.dev) by 0x52**.
 
 > **All credit for URM goes to 0x52.** URM is their work: the overlay, search,
 > variable editor, choice and path detection, replays, snapshots and everything
 > else this builds on. This repository contains **none of URM's code** - only
-> patches applied on top of it. To use it you need your own copy of URM 2.6.2
-> from [0x52.dev](https://0x52.dev). If URM is useful to you, please support 0x52
+> an add-on that runs on top of it, so you need URM itself from
+> [0x52.dev](https://0x52.dev). If URM is useful to you, please support 0x52
 > there.
 >
 > This project is not affiliated with or endorsed by 0x52.
 
+## Install
+
+You need two files in the game's `game` folder: URM, and this add-on.
+
+1. **Install URM** the usual way: download it from [0x52.dev](https://0x52.dev)
+   and put `0x52_URM.rpa` into the game's `game` folder.
+2. **Download [urm_compat.rpy](https://github.com/MotazMSAG/urm-compat/releases/latest/download/urm_compat.rpy)**
+   and put it in the same `game` folder.
+3. Start the game.
+
+```
+Some Game/
+├── Some Game.exe
+└── game/
+    ├── 0x52_URM.rpa      <- URM, from 0x52.dev
+    └── urm_compat.rpy    <- this add-on
+```
+
+That's it - no tools to run, and it works on any game URM works on
+(Ren'Py 7.2 and newer). The first launch takes a moment longer while the game
+compiles the add-on.
+
+**Update:** download the new `urm_compat.rpy` and replace the old one. URM keeps
+updating itself as usual.
+
+**Uninstall:** delete `urm_compat.rpy` and `urm_compat.rpyc` from the `game`
+folder. URM itself is untouched.
+
+**If something looks off:** the add-on writes lines starting with
+`URM Compat:` to the game's `log.txt`. If a URM update changed one of the
+screens this add-on adjusts, that one adjustment is skipped and logged - URM
+and everything else keep working.
+
 ## What it adds
 
 **Knowing what a variable does**
-- **Script index.** When the game window opens, the game's whole script is read
-  in the background (a small line in the corner shows progress). Every check
-  and every assignment of every variable is recorded.
+- **Script index.** When the game window opens, the game's script is read in
+  the background (a small line in the corner shows progress). Every check and
+  every assignment of every variable is recorded.
 - **Variable panel.** Clicking a variable in URM's editor now says what the
   game does with it, in story terms: what each value gets you (which scenes,
   how many lines, the first line said), whether that scene is still ahead of
@@ -49,34 +82,38 @@ An add-on layer for **[Universal Ren'Py Mod (URM)](https://0x52.dev) by 0x52**.
   Skip already skips forward to the next one).
 - A quickmenu button for Ren'Py's *skip unseen text* preference.
 
-Works on Ren'Py 7.2.1 through 8.x.
+## For developers
 
-## Building
+The add-on is written in two files, and `urm_compat.rpy` is generated from
+them:
 
-1. Get URM 2.6.2 from [0x52.dev](https://0x52.dev) and put its
-   `0x52_URM.rpa` next to `build_rpa.py`.
-2. Build with the Python bundled in any ordinary Ren'Py 8 game (the game is
-   only borrowed for its engine; nothing in it is touched):
+- `game_fixes.rpy` - everything that runs in the game
+- `ui_tweaks.py` - the edits to URM's screens, each a passage to find and its
+  replacement
 
-   ```
-   "<game>/lib/py3-windows-x86_64/python.exe" -I build_rpa.py "<game>"
-   ```
+```
+python make_rpy.py
+```
 
-3. Copy `dist/0x52_URM.rpa` into the `game/` folder of the game you want to
-   use it in, in place of URM's own archive.
+writes `dist/urm_compat.rpy`. Nothing else is needed for that - no game and
+no Ren'Py.
 
-The build refuses to run if any patch no longer matches URM's source - for
-example after a URM update - instead of producing a half-patched archive.
+URM loads its screens as text at startup; the generated file wraps that one
+loader and applies the edits in memory, so URM's own archive is never
+modified. (`build_rpa.py` can still bake everything into a single replacement
+`0x52_URM.rpa` instead, if you prefer one file - see its docstring.)
 
-## Tests
+**Tests** borrow any Ren'Py 8 game for its engine (nothing in it is touched)
+and need your copy of URM's archive:
 
 ```
 "<game>/lib/py3-windows-x86_64/python.exe" -I tests/run_tests.py "<game>" 0x52_URM.rpa
 ```
 
-The suite parses URM's patched screens with the real Ren'Py parser, checks
-that every patch still matches, and unit-tests the index, the variable panel,
-the gallery switch and rollback against real Ren'Py AST nodes. See
+They parse URM's patched screens with the real Ren'Py parser, check that every
+edit still matches URM's source, check that `urm_compat.rpy` produces exactly
+the same screens as the archive build, and unit-test the index, the variable
+panel, the gallery switch and rollback against real Ren'Py AST nodes. See
 [tests/README.md](tests/README.md).
 
 ## License

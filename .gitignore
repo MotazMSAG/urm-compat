@@ -1,0 +1,6 @@
+# URM itself is 0x52's and is never committed - bring your own copy.
+*.rpa
+*.rpyc
+dist/
+__pycache__/
+*.pyc

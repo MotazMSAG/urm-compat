@@ -1,0 +1,3 @@
+# game_fixes.rpy must stay LF: Ren'Py's lexer does not join a backslash
+# followed by CRLF, and tests/check_rpy.py refuses CR bytes.
+* text=auto eol=lf

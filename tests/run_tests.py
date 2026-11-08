@@ -37,7 +37,8 @@ EXPECTED = {
         "x52URM.scaleText(statement.condition",
         # The gates after the detected one, read-only because URM can only
         # force a path through the node it detected.
-        "urm_later_gates()",
+        "urm_later_gate_rows()",
+        "urmf_force_later",
     ],
     "0x52-URM/screens/choices.rpy.x52": ["x52URM.scaleText(choice.condition"],
     "0x52-URM/screens/watchpanel.rpy.x52": [
@@ -124,7 +125,11 @@ HELPERS = ["urm_path_cards", "urm_choice_cards", "urm_copy", "urm_store_root",
            # The gallery switch.
            "urmg_toggle", "urmg_badge_text",
            # Rollback: back to the last choice.
-           "urmr_back_to_choice"]
+           "urmr_back_to_choice",
+           # Forcing paths URM marks "not forceable".
+           "urm_later_gate_rows", "urmf_force_later",
+           # Flags: choices kept as words in a collection.
+           "urmfl_has", "urmfl_rows", "urmfl_set", "urmfl_var", "urmfl_is_on"]
 
 # Inside a Ren'Py store, dict / list / set are rebound to the rollback-tracked
 # Revertable kinds (minstore.py:37-50) and [] / {} literals are rewritten to
@@ -405,6 +410,28 @@ def main(argv):
             print("    pass  (%d cases)" % out.count("pass  "))
         else:
             failures.append("the one-file install checks failed")
+            print(out)
+
+        print("[7i] any path can be forced, even behind a jump")
+        result = subprocess.run(
+            [python, "-I", "-B", os.path.join(HERE, "check_force.py"), game],
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=300)
+        out = result.stdout.decode("utf-8", "replace")
+        if result.returncode == 0:
+            print("    pass  (%d cases)" % out.count("pass  "))
+        else:
+            failures.append("the force-a-path checks failed")
+            print(out)
+
+        print("[7j] flags: choices a game keeps as words in a collection")
+        result = subprocess.run(
+            [python, "-I", "-B", os.path.join(HERE, "check_flags.py"), game],
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=300)
+        out = result.stdout.decode("utf-8", "replace")
+        if result.returncode == 0:
+            print("    pass  (%d cases)" % out.count("pass  "))
+        else:
+            failures.append("the flag checks failed")
             print(out)
 
         print("[7g] rollback goes back to the last choice, and further")

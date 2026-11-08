@@ -586,6 +586,20 @@ tweak(
 )
 
 
+_BROWSE_ALL = """                if hasattr(renpy.store, 'urm_store_root'):
+                    textbutton "{urm_notl}Browse all{/urm_notl}" yalign .5 selected False hovered x52URM.Tooltip('Open every variable in the game as a browsable tree. No search, and no guessing at names.') unhovered x52URM.Tooltip() action SetLocalVariable('expandObjectVars', urm_store_root())"""
+
+tweak(
+    "a Flags button beside Search, for games that keep choices as words",
+    _SEARCH,
+    check="urmfl_has",
+    old=_BROWSE_ALL,
+    new=_BROWSE_ALL + """
+                if hasattr(renpy.store, 'urmfl_has') and urmfl_has():
+                    textbutton "{urm_notl}Flags{/urm_notl}" yalign .5 selected False hovered x52URM.Tooltip('This game keeps many choices as words in a collection instead of variables. List them, switch them on or off, and see what each one does.') unhovered x52URM.Tooltip() action Show('urmfl_flags')""",
+)
+
+
 # ---------------------------------------------------------------------------
 # Copy a variable's name
 # ---------------------------------------------------------------------------
@@ -867,10 +881,8 @@ tweak(
 # The gates the Path dialog never showed
 # ---------------------------------------------------------------------------
 #
-# Read-only on purpose. URM forces a path by rewriting the chain up to the
-# DETECTED node, so a gate two statements later cannot be forced - and a
-# Select button that silently does nothing is worse than no button. The
-# wording says so rather than leaving the player to find out.
+# URM forces a path by rewriting the chain up to the DETECTED node, so on its
+# own it cannot force a gate two statements later.
 
 _PATHS_TAIL = ("                            use x52URM_iconButton('\\ue86c',"
                " '{urm_notl}Select{/urm_notl}')\n"
@@ -879,12 +891,12 @@ _PATHS_TAIL = ("                            use x52URM_iconButton('\\ue86c',"
                " prompt='This path cannot be force selected\\nProbably because"
                " it\\'s behind a call or jump'))")
 
-tweak(
-    "the gates after this one, under the Path options table",
-    SCREENS + "paths.rpy.x52",
-    check="urm_later_gates",
-    old=_PATHS_TAIL,
-    new=_PATHS_TAIL + """
+# The gates after this one. Each has a Select: urmf_force_later makes every
+# if-statement before it fall through and takes its arm when the game reaches
+# it (see "Force any path" in game_fixes.rpy). The first version of this
+# section was read-only; it is listed as `old` so it is upgraded in place.
+
+_LATER_GATES_V1 = """
 
         if hasattr(renpy.store, 'urm_later_gates'):
             python:
@@ -905,6 +917,45 @@ tweak(
                                 spacing x52URM.scalePxInt(4)
                                 text _urmIcon style_suffix 'icon' substitute False yalign 0.0
                                 text _urmHead style_suffix 'button_text' substitute False yalign 0.0 xmaximum x52URM.scalePxInt(700) rest_indent x52URM.scalePxInt(10)
+                        frame:
+                            background x52URM.Theme.colors.buttonBg
+                            xsize x52URM.scalePxInt(760)
+                            padding (x52URM.scalePxInt(6), x52URM.scalePxInt(4))
+                            vbox:
+                                spacing x52URM.scalePxInt(2)
+                                for _urmBullet, _urmBody in _urmEffects:
+                                    hbox:
+                                        spacing x52URM.scalePxInt(4)
+                                        text _urmBullet style_suffix 'icon' substitute False yalign 0.0
+                                        text _urmBody style_suffix 'button_text' substitute False yalign 0.0 xmaximum x52URM.scalePxInt(690) rest_indent x52URM.scalePxInt(10)"""
+
+tweak(
+    "the gates after this one, under the Path options table",
+    SCREENS + "paths.rpy.x52",
+    check="urmf_force_later",
+    old=[_PATHS_TAIL + _LATER_GATES_V1, _PATHS_TAIL],
+    new=_PATHS_TAIL + """
+
+        if hasattr(renpy.store, 'urm_later_gate_rows'):
+            python:
+                _urmLater = urm_later_gate_rows()
+            if _urmLater:
+                null height x52URM.scalePxInt(10)
+                frame style_suffix 'seperator' background x52URM.Theme.colors.buttonBorder ysize x52URM.scalePxInt(2)
+                null height x52URM.scalePxInt(6)
+                text 'Match none of the above and the script runs straight into these. Select one and the game takes it when it gets there.' style_suffix 'description'
+                null height x52URM.scalePxInt(6)
+                vbox spacing x52URM.scalePxInt(4):
+                    for _urmRow, _urmIcon, _urmNum, _urmHead, _urmEffects in _urmLater:
+                        frame:
+                            background x52URM.Theme.colors.buttonBgHover
+                            xsize x52URM.scalePxInt(760)
+                            padding (x52URM.scalePxInt(6), x52URM.scalePxInt(4))
+                            hbox:
+                                spacing x52URM.scalePxInt(4)
+                                text _urmIcon style_suffix 'icon' substitute False yalign 0.0
+                                text _urmHead style_suffix 'button_text' substitute False yalign 0.0 xmaximum x52URM.scalePxInt(600) rest_indent x52URM.scalePxInt(10)
+                                textbutton '{urm_notl}Select{/urm_notl}' text_size x52URM.scalePxInt(16) yalign 0.0 action [Function(urmf_force_later, _urmRow), Hide('URM_paths'), Hide('URM_CodeView')]
                         frame:
                             background x52URM.Theme.colors.buttonBg
                             xsize x52URM.scalePxInt(760)
@@ -1164,8 +1215,79 @@ _GALLERY_BADGE = """screen urmg_badge():
 _MIDDLE_CLICK = """screen urmr_middle():
     add urmr_middle_click"""
 
+# Flags - choices a game keeps as words in a collection (see "Flags" in
+# game_fixes.rpy). The dialog is URM's own editor shape: what the flag is, an
+# ON/OFF switch, and the variable panel under it. The list is opened from the
+# Flags button beside Search.
+_FLAG_SCREENS = """screen urmfl_flag_dialog(name):
+    layer 'x52Overlay'
+    style_prefix 'x52URM'
+
+    python:
+        _urmflVar = urmfl_var(name)
+        _urmflOn = _urmflVar.value
+
+    use x52URM_Dialog(title='{urm_notl}Flag{/urm_notl}', closeAction=Hide('urmfl_flag_dialog'), modal=True, icon='\\ue153'):
+        vbox xminimum x52URM.scalePxInt(450)
+        label _urmflVar.word substitute False
+        text _urmflVar.where substitute False style_suffix 'description'
+        null height x52URM.scalePxInt(10)
+        hbox:
+            spacing x52URM.scalePxInt(10)
+            text "{urm_notl}Now:{/urm_notl}" yalign .5
+            text ("{urm_notl}{b}ON{/b}{/urm_notl}" if _urmflOn else "{urm_notl}{b}OFF{/b}{/urm_notl}") yalign .5
+            null width x52URM.scalePxInt(10)
+            textbutton "{urm_notl}Turn ON{/urm_notl}" sensitive (not _urmflOn) action Function(urmfl_set, name, True)
+            textbutton "{urm_notl}Turn OFF{/urm_notl}" sensitive bool(_urmflOn) action Function(urmfl_set, name, False)
+        if renpy.has_screen('urmi_var_panel'):
+            use urmi_var_panel(_urmflVar, None)
+        hbox:
+            yoffset x52URM.scalePxInt(15)
+            align (1.0, 1.0)
+            textbutton "{urm_notl}Close{/urm_notl}" action Hide('urmfl_flag_dialog')
+
+screen urmfl_flags():
+    layer 'x52Overlay'
+    style_prefix 'x52URM'
+    default flagFilter = x52URM.Input(autoFocus=True)
+
+    on "show" action [x52URM.Search.queryInput.Disable(), flagFilter.Enable()]
+
+    python:
+        _urmflRows, _urmflMatched = urmfl_rows(str(flagFilter))
+
+    use x52URM_Dialog(title='{urm_notl}Flags{/urm_notl}', closeAction=Hide('urmfl_flags'), modal=True, icon='\\ue153'):
+        vbox xsize x52URM.scalePxInt(1100)
+        text "{urm_notl}Choices this game keeps as words in a collection instead of variables. Switch one, or open it to see what it does.{/urm_notl}" style_suffix 'description'
+        null height x52URM.scalePxInt(8)
+        hbox:
+            spacing x52URM.scalePxInt(6)
+            text '\\ue8b6' style_suffix 'icon' yalign .5
+            button:
+                xminimum x52URM.scalePxInt(500)
+                key_events True
+                action flagFilter.Enable()
+                input value flagFilter
+            text ("[_urmflMatched] {urm_notl}found{/urm_notl}" + (" {urm_notl}(first 200 shown){/urm_notl}" if _urmflMatched > 200 else "")) yalign .5 style_suffix 'description'
+        null height x52URM.scalePxInt(8)
+        viewport:
+            ymaximum x52URM.scalePxInt(560)
+            mousewheel True
+            draggable True
+            scrollbars "vertical"
+            vbox:
+                spacing x52URM.scalePxInt(4)
+                for _urmflName, _urmflWord, _urmflState, _urmflInfo in _urmflRows:
+                    hbox:
+                        spacing x52URM.scalePxInt(10)
+                        textbutton ("{urm_notl}ON{/urm_notl}" if _urmflState else "{urm_notl}OFF{/urm_notl}") xminimum x52URM.scalePxInt(70) text_size x52URM.scalePxInt(17) action Function(urmfl_set, _urmflName, not _urmflState)
+                        textbutton "{urm_notl}Details{/urm_notl}" text_size x52URM.scalePxInt(17) action Show('urmfl_flag_dialog', name=_urmflName)
+                        text _urmflWord substitute False size x52URM.scalePxInt(19) yalign .5
+                        text _urmflInfo substitute False size x52URM.scalePxInt(16) color '#9e9e9e' yalign .5"""
+
 _INDEX_SCREENS = (_PROGRESS_SCREEN + "\n\n" + _PANEL_SCREEN + "\n\n"
-                  + _GALLERY_BADGE + "\n\n" + _MIDDLE_CLICK + "\n\n")
+                  + _GALLERY_BADGE + "\n\n" + _MIDDLE_CLICK + "\n\n"
+                  + _FLAG_SCREENS + "\n\n")
 
 _ADD_ITEM = "screen URM_add_item(parentVar):"
 

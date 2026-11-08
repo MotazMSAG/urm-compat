@@ -65,10 +65,24 @@ and everything else keep working.
   pay-on-click *Deeper* button, number operators (`>=5`, `3..8`), better
   ranking, a *Browse all* button, and a copy-name button in the editor.
 
+**Flags**
+- Many games keep choices as words in a collection instead of variables -
+  `option("x")` / `true("x")`, `new_path(p)` / `on_path("p")`. URM's editor
+  only sees "a set". The add-on works out each game's own helper functions
+  from their code and turns every word into a flag: a **Flags** button beside
+  Search lists them with ON/OFF switches and a filter, flags in conditions are
+  clickable, and each flag gets the full variable panel (what it gets you,
+  which choice sets it, what else a scene needs).
+
 **Paths and choices**
+- **Force any path.** URM can't force a path that sits behind a `jump` or
+  `call` ("Not forceable"). Select now works on every row: the game takes the
+  chosen branch when it reaches it, however it gets there. It applies once,
+  and loading a save cancels it.
 - Notification cards that show the condition in the path and choice rows,
-  the gates that come after the detected one, and a look-ahead setting for
-  cinematic games where path detection runs out of budget.
+  the gates that come after the detected one (each with its own Select), and
+  a look-ahead setting for cinematic games where path detection runs out of
+  budget.
 - Labels list: a filter and seen / not-seen markers.
 
 **Settings and controls**

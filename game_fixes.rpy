@@ -730,6 +730,12 @@ init 999 python:
 
         steps = []
 
+        # Parallel to steps: (if-statement, arm index) for each, or (None, -1)
+        # for the fall-through tail. Kept on URM's constant store, so the
+        # force-a-path buttons can name the exact arm without walking again.
+        meta = python_list()
+        x52URM.Var._urmChainMeta = meta
+
         detected = x52URM.PathDetection.nextIfStatement
 
         if not detected:
@@ -741,14 +747,16 @@ init 999 python:
 
             closed = False
 
-            for cond, block in (getattr(node, "entries", None) or []):
+            for arm, (cond, block) in enumerate(getattr(node, "entries", None) or []):
 
                 if not _urm_is_condition(cond):
                     steps.append(("else", None, block))
+                    meta.append((node, arm))
                     closed = True
                     break
 
                 steps.append(("gate", cond, block))
+                meta.append((node, arm))
 
             if closed:
                 return steps
@@ -771,6 +779,7 @@ init 999 python:
                 tail = _urm_tail(following)
                 if tail:
                     steps.append(("tail", None, tail))
+                    meta.append((None, -1))
                 return steps
 
         return steps
@@ -1864,13 +1873,87 @@ init 999 python:
     # does nothing is not.
 
     def urm_later_gates():
-        """[(icon, number, condition, effects)] for the gates after the first."""
+        """[(icon, number, condition, effects)] for the gates after the first if."""
 
+        out = python_list()
+        for _i, icon, number, head, effects in urm_later_gate_rows():
+            out.append((icon, number, head, effects))
+        return out
+
+    def urm_later_gate_rows():
+        """
+        [(row, icon, number, condition, effects)] for every gate after the
+        if-statement the Path options table shows - the ones the script runs
+        into when none of that table matches.
+
+        This used to be "every card but the first", and the first if's own
+        arms are cards too: the section repeated rows 2.. of the table. Each
+        row now also remembers how to force it (urmf_force_later).
+        """
+
+        rows = python_list()
+        specs = python_list()
         try:
-            cards = urm_path_cards()[1]
-            return cards[1:] if len(cards) > 1 else []
+            steps = _urm_chain()
+            meta = getattr(x52URM.Var, "_urmChainMeta", None) or ()
+            if not steps or len(meta) != len(steps):
+                return rows
+            first = meta[0][0]
+            success = _urm_signal("success")
+            error = _urm_signal("error")
+
+            order = python_list()      # the if-statements, in the order run
+            fired = False
+            unknown = False
+            number = 0
+            for (kind, cond, payload), (node, arm) in zip(steps, meta):
+                if node is not None and node not in order:
+                    order.append(node)
+
+                if kind == "gate":
+                    number += 1
+                    truth = None if fired else _urm_truth(cond)
+                    if truth is None and not fired:
+                        unknown = True
+                    if truth is True and not fired and not unknown:
+                        fired = True
+                        icon = _urm_tint(_URM_ICON_LIVE, success)
+                    elif unknown and not fired:
+                        icon = _URM_ICON_UNKNOWN
+                    else:
+                        icon = _urm_tint(_URM_ICON_DEAD, error)
+                    head = _urm_colorize(str(cond))
+                    effects = _urm_effects(payload)
+                    label = "%d" % number
+                else:
+                    icon = _urm_fallback_icon(fired, unknown, success, error)
+                    fired = True
+                    head = _urm_words("nothing above matches")
+                    label = ""
+                    if kind == "else":
+                        effects = _urm_effects(payload)
+                    else:
+                        effects = python_list()
+                        effects.append((_URM_ICON_EFFECT, _urm_colorize(payload)))
+
+                if node is first or len(rows) >= _URM_MAX_GATES:
+                    continue
+
+                # Miss every if-statement before this one, then take this arm.
+                spec = python_list()
+                for earlier in order:
+                    if earlier is node:
+                        break
+                    spec.append((earlier, -1))
+                if node is not None:
+                    spec.append((node, arm))
+                rows.append((len(rows), icon, label, head, effects))
+                specs.append(spec)
         except BaseException:
-            return []
+            del rows[:]
+            del specs[:]
+        x52URM.Var._urmfLaterSpecs = specs
+        return rows
 
 
 # A separate block: a failure to patch one of URM's classes must not take the
@@ -2045,6 +2128,11 @@ init 999 python:
         _urmc_orig_vars = x52URM.CodeViewClass.interactiveVariables
 
         def _urmc_interactiveVariables(self, coloredCode):
+            # Flags first (true("x") opens the flag), then bare names.
+            try:
+                coloredCode = _urmfl_links(self, coloredCode)
+            except Exception:
+                pass
             return _urmc_orig_vars(
                 self, _urmc_bare_var_links(self, coloredCode))
 
@@ -2263,6 +2351,70 @@ init 999 python:
             _urmi_mentions(child, out)
 
 
+    class _URMIFlag(python_object):
+        """One word a game keeps in a collection, named by the code that tests it."""
+
+        def __init__(self, name, word, coll, getter, attr):
+            self.name = name
+            self.word = word
+            self.coll = coll          # store name of the collection
+            self.getter = getter      # the game's test function, or None
+            self.attr = attr          # members are objects matched on this attribute
+            self.objects = python_list()  # store names of objects that stand for it
+
+    def _urmi_helper_role(fn, param):
+        """("get" | "add" | "remove", collection, attribute or None), or None."""
+
+        role = None
+        coll = None
+        attr = None
+        remover = fn.name.lower().startswith(("remove", "del", "unset", "lose", "drop", "clear"))
+
+        for node in _urmi_ast.walk(fn):
+            # o in coll
+            if isinstance(node, _urmi_ast.Compare) and len(node.ops) == 1 and \
+                    isinstance(node.ops[0], _urmi_ast.In) and \
+                    isinstance(node.left, _urmi_ast.Name) and node.left.id == param:
+                target = _urmi_name(node.comparators[0])
+                if target is not None and role is None:
+                    role, coll = "get", target
+
+            # any(x.name == i for x in coll)
+            if isinstance(node, (_urmi_ast.GeneratorExp, _urmi_ast.ListComp)) and node.generators:
+                gen = node.generators[0]
+                target = _urmi_name(gen.iter)
+                var = getattr(gen.target, "id", None)
+                for sub in _urmi_ast.walk(node):
+                    if not isinstance(sub, _urmi_ast.Compare) or len(sub.ops) != 1:
+                        continue
+                    sides = (sub.left, sub.comparators[0])
+                    for one, other in (sides, sides[::-1]):
+                        if isinstance(one, _urmi_ast.Attribute) and \
+                                isinstance(one.value, _urmi_ast.Name) and one.value.id == var:
+                            mine = (isinstance(other, _urmi_ast.Name) and other.id == param) or (
+                                isinstance(other, _urmi_ast.Attribute) and
+                                isinstance(other.value, _urmi_ast.Name) and other.value.id == param)
+                            if mine and target is not None:
+                                if remover:
+                                    return ("remove", target, one.attr)
+                                if role is None and isinstance(sub.ops[0], _urmi_ast.Eq):
+                                    role, coll, attr = "get", target, one.attr
+
+            # coll.add(i) / coll.append(i) / coll.remove(i) / coll.discard(i)
+            if isinstance(node, _urmi_ast.Call) and isinstance(node.func, _urmi_ast.Attribute) \
+                    and node.args and isinstance(node.args[0], _urmi_ast.Name) \
+                    and node.args[0].id == param:
+                target = _urmi_name(node.func.value)
+                if target is not None:
+                    if node.func.attr in ("add", "append"):
+                        return ("add", target, None)
+                    if node.func.attr in ("remove", "discard"):
+                        return ("remove", target, None)
+
+        if role == "get":
+            return (role, coll, attr)
+        return None
+
     class _URMIndex(python_object):
         """
         Built once, read many times. Fields are plain python containers.
@@ -2288,6 +2440,14 @@ init 999 python:
             self.tokens = python_dict()  # token -> [(site, collection, op)]
             self.calls = python_dict()   # callee -> [(site, string args)]
             self.declared = python_dict()  # name -> (site, source text)
+
+            # Flags: games that keep choices as words in a collection rather
+            # than as variables - option("x") / true("x"), new_path(p) /
+            # on_path("p"). See _URMIndex._helpers and _flags.
+            self.helpers = python_dict()   # function -> (role, collection, attribute or None)
+            self.callreads = python_dict() # callee -> [(site, string args, "truthy"/"falsy")]
+            self.callnames = python_dict() # callee -> [(site, name args)]
+            self.flags = python_dict()     # flag name -> _URMIFlag
 
             self.parent = python_dict()  # id(node) -> (parent node, kind, extra)
             self.labels = python_dict()  # label name -> Label node
@@ -2336,6 +2496,12 @@ init 999 python:
                 self._conds[text] = found
                 return found
 
+            negated = python_set()
+            for node in _urmi_ast.walk(tree):
+                if isinstance(node, _urmi_ast.UnaryOp) and isinstance(
+                        node.op, _urmi_ast.Not) and isinstance(node.operand, _urmi_ast.Call):
+                    negated.add(id(node.operand))
+
             for node in _urmi_ast.walk(tree):
 
                 if isinstance(node, _urmi_ast.Compare):
@@ -2360,7 +2526,8 @@ init 999 python:
                             ok, value = _urmi_literal(arg)
                             if ok and isinstance(value, _urmi_text):
                                 args.append(value)
-                        found.append(("call", callee, tuple(args), None))
+                        found.append(("call", callee, tuple(args),
+                                      "falsy" if id(node) in negated else "truthy"))
 
             # Bare names used as truth values: `if flag:`, `a and b`.
             self._truths(found, tree.body)
@@ -2439,6 +2606,7 @@ init 999 python:
                     self._add(self.reads, b, (site, c, a))
                 elif kind == "call":
                     self._add(self.calls, a, (site, b))
+                    self._add(self.callreads, a, (site, b, c or "truthy"))
                 elif kind == "mention":
                     self._add(self.reads, a, (site, "mention", None))
 
@@ -2483,11 +2651,18 @@ init 999 python:
                     callee = _urmi_callee(call)
                     if callee is not None:
                         args = python_list()
+                        names = python_list()
                         for arg in call.args:
                             ok, value = _urmi_literal(arg)
                             if ok and isinstance(value, _urmi_text):
                                 args.append(value)
+                            else:
+                                argname = _urmi_name(arg)
+                                if argname is not None:
+                                    names.append(argname)
                         self._add(self.calls, callee, (site, tuple(args)))
+                        if names:
+                            self._add(self.callnames, callee, (site, tuple(names)))
 
                         # coll.append("x") / coll.add("x") writes a token.
                         if isinstance(call.func, _urmi_ast.Attribute) and \
@@ -2625,6 +2800,8 @@ init 999 python:
                                              "source", None)
                             if source:
                                 self._python(node, source)
+                                if "def " in source:
+                                    self._helpers(source)
 
                         elif isinstance(node, DECLARE):
                             self._declare(node)
@@ -2640,6 +2817,11 @@ init 999 python:
                         lines.append(line)
                         names.append(name)
                     self.label_lines[fn] = (lines, names)
+
+                try:
+                    self._flags()
+                except Exception as error:
+                    print("0x52-URM compat: flags not indexed (%s)" % (error,))
 
                 total = 0
                 for bucket in self.reads.values():
@@ -2657,6 +2839,140 @@ init 999 python:
                 self.seconds = time.time() - started
                 self.finished_at = time.time()
                 self.state = "failed"
+
+        def _helpers(self, source):
+            """
+            Learn the game's flag helpers from their definitions:
+
+                def true(o):        if o in mc_choices: return True
+                def option(i):      mc_choices.add(i)
+                def on_path(i):     any(x.name == i for x in mc_paths)
+                def new_path(i):    mc_paths.add(i)
+                def remove_path(i): rebuilds mc_paths without i
+
+            Only module-level functions with a first parameter; a method is
+            the game's class at work, not a flag. Recorded as (role,
+            collection, attribute) with role "get", "add" or "remove".
+            """
+
+            try:
+                tree = _urmi_ast.parse(source, mode="exec")
+            except Exception:
+                return
+
+            for fn in tree.body:
+                if not isinstance(fn, _urmi_ast.FunctionDef):
+                    continue
+                args = getattr(fn.args, "args", None) or ()
+                if not args:
+                    continue
+                first = args[0]
+                param = getattr(first, "arg", None) or getattr(first, "id", None)
+                if not param:
+                    continue
+                found = _urmi_helper_role(fn, param)
+                if found is not None:
+                    self.helpers[fn.name] = found
+
+        def _flags(self):
+            """
+            Turn helper calls into flags, each a named variable of its own:
+            reads for every getter call in a condition, writes for every setter
+            or remover call, and the same for words tested directly with
+            `"x" in coll` and written with coll.add / append / remove.
+
+            A flag is named by the code that tests it - true("x"), or "x" in
+            coll when the game has no getter - so the name is what the player
+            sees in the condition.
+            """
+
+            getters = python_dict()        # collection -> getter function
+            for fname, (role, coll, attr) in self.helpers.items():
+                if role == "get" and coll not in getters:
+                    getters[coll] = (fname, attr)
+
+            def flag(coll, word, objname=None):
+                if coll in getters:
+                    fname, attr = getters[coll]
+                    name = '%s("%s")' % (fname, word)
+                else:
+                    fname, attr = None, None
+                    name = '"%s" in %s' % (word, coll)
+                rec = self.flags.get(name)
+                if rec is None:
+                    rec = _URMIFlag(name, word, coll, fname, attr)
+                    self.flags[name] = rec
+                if objname and objname not in rec.objects:
+                    rec.objects.append(objname)
+                return name
+
+            for coll, (fname, attr) in getters.items():
+                for site, args, op in self.callreads.get(fname, ()):
+                    if args:
+                        self._add(self.reads, flag(coll, args[0]), (site, op, None))
+
+            for fname, (role, coll, attr) in self.helpers.items():
+                if role not in ("add", "remove"):
+                    continue
+                on = role == "add"
+                for site, args in self.calls.get(fname, ()):
+                    if args:
+                        self._add(self.writes, flag(coll, args[0]), (site, "=", on, None))
+                for site, names in self.callnames.get(fname, ()):
+                    word = self._object_word(names[0], getters.get(coll, (None, None))[1])
+                    if word:
+                        self._add(self.writes, flag(coll, word, names[0]), (site, "=", on, None))
+
+            # Words tested directly: "met_kim" in diary.
+            for word, bucket in self.tokens.items():
+                for site, coll, op in bucket:
+                    if op in ("in", "not in"):
+                        self._add(self.reads, flag(coll, word),
+                                  (site, "truthy" if op == "in" else "falsy", None))
+            for coll in python_list(self.writes.keys()):
+                if coll in self.flags:
+                    continue
+                for site, op, value, _t in self.writes.get(coll) or ():
+                    if op in (".add", ".append", ".remove", ".discard") and \
+                            isinstance(value, _urmi_text):
+                        named = flag(coll, value)
+                        if named in self.reads:
+                            self._add(self.writes, named, (site, "=", op in (".add", ".append"), None))
+
+            # A word only ever written, never tested, is not a flag anyone needs.
+            for name in python_list(self.flags.keys()):
+                if name not in self.reads:
+                    del self.flags[name]
+
+        def _object_word(self, objname, attr):
+            """The word an object stands for: Path("kim_mercy_path", ...) -> kim_mercy_path."""
+
+            if not attr:
+                return None
+            declared = self.declared.get(objname)
+            source = declared[1] if declared else None
+            if source:
+                try:
+                    tree = _urmi_ast.parse(source.strip(), mode="eval").body
+                    if isinstance(tree, _urmi_ast.Call):
+                        for arg in tree.args:
+                            ok, value = _urmi_literal(arg)
+                            if ok and isinstance(value, _urmi_text):
+                                return value
+                        for kw in getattr(tree, "keywords", None) or ():
+                            if kw.arg == attr:
+                                ok, value = _urmi_literal(kw.value)
+                                if ok and isinstance(value, _urmi_text):
+                                    return value
+                except Exception:
+                    pass
+            try:
+                value = getattr(getattr(renpy.store, objname), attr)
+                if isinstance(value, _urmi_text):
+                    return value
+            except Exception:
+                pass
+            return None
 
         def _declare(self, node):
             varname = getattr(node, "varname", None)
@@ -3056,6 +3372,11 @@ init 999 python:
     def urmi_fill(var, valueInput, value):
         """Put one of the game's own values into the editor - not commit it."""
 
+        if getattr(var, "isFlag", False):
+            # A flag has no value box: Set ON / Set OFF switch it directly.
+            urmfl_set(var.name, bool(value))
+            return
+
         try:
             if var.varType == "boolean":
                 SetScreenVariable("newValue", bool(value))()
@@ -3139,6 +3460,17 @@ init 999 python:
     _URMP_ROWS_SHOWN = 10
 
 
+    # Stand-ins until the Flags block below replaces them, so the panel works
+    # on its own if that block is missing or failed.
+    def _urmfl_record(name):
+        return None
+
+    def _urmfl_name_of(node):
+        return None
+
+    def urmfl_is_on(name):
+        return None
+
     def _urmp_state():
         holder = x52URM.Var
         st = getattr(holder, "_urmpState", None)
@@ -3197,6 +3529,19 @@ init 999 python:
 
         if depth > 40 or node is None:
             return _URMP_UNK
+
+        if isinstance(node, (_urmi_ast.Call, _urmi_ast.Compare)):
+            flagname = _urmfl_name_of(node)
+            if flagname is not None:
+                if target is not None and flagname == target:
+                    return cand
+                value = urmfl_is_on(flagname)
+                if value is None:
+                    return _URMP_UNK
+                rec = _urmp_state().get("deps")
+                if rec is not None and len(rec) < 200:
+                    rec[flagname] = value
+                return value
 
         if isinstance(node, (_urmi_ast.Name, _urmi_ast.Attribute, _urmi_ast.Subscript)):
             if target is not None and _urmi_name(node) == target:
@@ -3319,6 +3664,9 @@ init 999 python:
         return _URMP_UNK
 
     def _urmp_value(name):
+        if _urmfl_record(name) is not None:
+            value = urmfl_is_on(name)
+            return _URMP_UNK if value is None else value
         return _urmp_ev(_urmp_parse(name))
 
     def _urmp_src(node, depth=0):
@@ -3388,8 +3736,30 @@ init 999 python:
 
     def _urmp_names_in(node):
         found = python_list()
-        _urmi_mentions(node, found)
+        _urmp_mentions(node, found)
         return found
+
+    def _urmp_mentions(node, out):
+        """_urmi_mentions, with each flag test - true("x") - as one name."""
+
+        if isinstance(node, (_urmi_ast.Call, _urmi_ast.Compare)):
+            flagname = _urmfl_name_of(node)
+            if flagname is not None:
+                out.append(flagname)
+                return
+        if isinstance(node, (_urmi_ast.Name, _urmi_ast.Attribute, _urmi_ast.Subscript)):
+            name = _urmi_name(node)
+            if name is not None:
+                out.append(name)
+                return
+        if isinstance(node, _urmi_ast.Call):
+            for arg in node.args:
+                _urmp_mentions(arg, out)
+            for kw in getattr(node, "keywords", None) or ():
+                _urmp_mentions(kw.value, out)
+            return
+        for child in _urmi_ast.iter_child_nodes(node):
+            _urmp_mentions(child, out)
 
 
     # ------------------------------------------------------------------
@@ -3459,6 +3829,8 @@ init 999 python:
         return u'"%s"' % (text,)
 
     def _urmp_link(name):
+        if _urmfl_record(name) is not None:
+            return u"{a=URMFlag:%s}%s{/a}" % (name, name.replace("{", "{{"))
         return u"{a=URMVarDialog:%s}%s{/a}" % (name, name.replace("{", "{{"))
 
 
@@ -3667,6 +4039,8 @@ init 999 python:
             return text
         if s.target:
             n = _urmp_label_size(index, s.target, budget)
+            if n == 1:
+                return "goes to %s (1 line there)" % s.target
             if n:
                 return "goes to %s (about %d lines there)" % (s.target, n)
             return "goes to %s" % s.target
@@ -3745,6 +4119,18 @@ init 999 python:
         not flag, target op literal, "x" in target - else None.
         """
 
+        flagname = _urmfl_name_of(atom) if isinstance(atom, (_urmi_ast.Call, _urmi_ast.Compare)) else None
+        if flagname is not None:
+            if flagname != target:
+                return None
+            if isinstance(atom, _urmi_ast.Compare) and isinstance(atom.ops[0], _urmi_ast.NotIn):
+                return ("OFF", False)
+            return ("ON", True)
+        if isinstance(atom, _urmi_ast.UnaryOp) and isinstance(atom.op, _urmi_ast.Not) and \
+                isinstance(atom.operand, (_urmi_ast.Call, _urmi_ast.Compare)):
+            flagname = _urmfl_name_of(atom.operand)
+            if flagname is not None:
+                return ("OFF", False) if flagname == target else None
         if isinstance(atom, (_urmi_ast.Name, _urmi_ast.Attribute, _urmi_ast.Subscript)):
             if _urmi_name(atom) == target:
                 return ("ON", True)
@@ -3925,6 +4311,10 @@ init 999 python:
                 names.add(b)
             elif kind != "call":
                 names.add(a)
+        tree = _urmp_parse(cond)
+        if tree is not None and index.flags:
+            for name in _urmp_names_in(tree):
+                names.add(name)
         cache[cond] = names
         return names
 
@@ -5959,3 +6349,368 @@ init 999 python:
     _urmr_mouse_up = _urmr_pygame.MOUSEBUTTONUP
 
     urmr_middle_click = _URMRMiddleClick()
+
+
+# ---------------------------------------------------------------------------
+# Force any path, even one behind a jump or call
+# ---------------------------------------------------------------------------
+#
+# URM forces a path by rewriting the chain of statements between the cursor
+# and the if-statement (PathDetection.rpy:146-184): it copies each node and
+# points the last one's .next at the chosen arm. A jump or call in between
+# leaves no .next to rewrite - the target is looked up by name - so URM marks
+# the row "Not forceable, probably because it's behind a call or jump", and
+# in a game that jumps between scenes that is most of them.
+#
+# This forces at the other end instead. Select remembers which arm of which
+# if-statement was picked, and when the game executes that if-statement it
+# goes down that arm, however it got there. It is one-shot: once taken, the
+# if-statement tests its conditions normally again, and loading a save
+# forgets anything not yet reached.
+#
+# The same works for the gates after the table: picking one makes every
+# if-statement before it fall through, then takes the picked arm.
+
+init 999 python:
+
+    class _URMFState(python_object):
+        def __init__(self):
+            self.pending = python_list()   # [(if-statement, arm)], -1 = none matches
+
+    def _urmf_state():
+        holder = x52URM.Var
+        st = getattr(holder, "_urmfState", None)
+        if st is None:
+            st = _URMFState()
+            holder._urmfState = st
+        return st
+
+    def _urmf_set(spec, words):
+        st = _urmf_state()
+        st.pending = python_list(spec)
+        renpy.notify(words)
+
+    def _urmf_take(node):
+        """The arm a pending force wants for this if-statement, or None."""
+
+        st = _urmf_state()
+        if not st.pending:
+            return None
+        for i, (target, arm) in enumerate(st.pending):
+            if target is node:
+                del st.pending[i]
+                return arm
+        return None
+
+    try:
+        _urmf_if_execute = renpy.ast.If.execute
+
+        def _urmf_execute(self):
+            arm = _urmf_take(self)
+            if arm is None:
+                return _urmf_if_execute(self)
+            entries = self.entries or ()
+            if 0 <= arm < len(entries) and entries[arm][1]:
+                target = entries[arm][1][0]
+            else:
+                target = self.next
+            renpy.game.context().next_node = target
+
+        if not getattr(renpy.ast.If.execute, "_urmf", False):
+            _urmf_execute._urmf = True
+            renpy.ast.If.execute = _urmf_execute
+    except Exception as error:
+        print("0x52-URM compat: paths behind a jump stay unforceable (%s)" % (error,))
+
+    def _urmf_forget():
+        _urmf_state().pending = python_list()
+
+    if _urmf_forget not in config.after_load_callbacks:
+        config.after_load_callbacks.append(_urmf_forget)
+
+    class _URMFForce(python_object):
+        """Select on a row of the Path options table that URM cannot force."""
+
+        def __init__(self, arm):
+            self.arm = arm
+
+        def __call__(self):
+            detected = x52URM.PathDetection.nextIfStatement
+            if not detected:
+                renpy.notify("URM: the path is no longer ahead")
+                return
+            spec = python_list()
+            spec.append((detected[0], self.arm))
+            _urmf_set(spec, "URM: path %d will be taken when the game gets there" % (self.arm + 1))
+
+        def __eq__(self, other):
+            return isinstance(other, _URMFForce) and other.arm == self.arm
+
+        def __ne__(self, other):
+            return not self.__eq__(other)
+
+        def __hash__(self):
+            return hash(("urmf", self.arm))
+
+    def urmf_force_later(row):
+        specs = getattr(x52URM.Var, "_urmfLaterSpecs", None) or ()
+        if row >= len(specs):
+            renpy.notify("URM: that path is no longer ahead")
+            return
+        _urmf_set(specs[row], "URM: that path will be taken when the game gets there")
+
+    try:
+        _urmf_action = x52URM.Path.Action
+
+        def _urmf_action_get(self):
+            action = _urmf_action.fget(self)
+            if action is not None:
+                return action
+            arm = getattr(self, "_m1_PathDetection__index", None)
+            if arm is None:
+                return None
+            return _URMFForce(arm)
+
+        x52URM.Path.Action = property(_urmf_action_get)
+    except Exception as error:
+        print("0x52-URM compat: Select stays off for paths behind a jump (%s)" % (error,))
+
+
+# ---------------------------------------------------------------------------
+# Flags: choices a game keeps as words in a collection
+# ---------------------------------------------------------------------------
+#
+# Many games do not give a choice a variable of its own. Nothing Is Forever
+# adds a word to one set - option("ch6_kim_accept") - and tests it with
+# true("ch6_kim_accept"), 1,133 and 1,987 times; its paths are objects in
+# another set, added with new_path(kim_mercy_path) and tested with
+# on_path("kim_mercy_path"). URM's editor sees "a set" and stops there.
+#
+# The index learns each game's helpers from their definitions (_URMIndex.
+# _helpers) and turns every test and every setter call into a flag named by
+# the code that tests it - true("ch6_kim_accept"), on_path("kim_mercy_path"),
+# or "met_kim" in diary for a word tested directly. From there a flag is a
+# variable like any other to the variable panel: what each side gets you,
+# which choice sets it, warnings.
+#
+# Reading a flag never calls the game's helper: the collection is read
+# directly. Switching one edits the collection directly too - adding the word,
+# or the object that stands for it - rather than calling new_path(), which
+# would also pop the game's "new path" notification.
+
+init 999 python:
+
+    def _urmfl_index():
+        index = _urmi_index()
+        if index is None or index.state != "ready" or not getattr(index, "flags", None):
+            return None
+        return index
+
+    def _urmfl_record(name):
+        index = _urmfl_index()
+        if index is None or not isinstance(name, _urmi_text):
+            return None
+        return index.flags.get(name)
+
+    def _urmfl_getters(index):
+        found = getattr(index, "_urmflGetters", None)
+        if found is None:
+            found = python_dict()
+            for fname, (role, coll, _attr) in index.helpers.items():
+                if role == "get" and coll not in found:
+                    found[coll] = fname
+            index._urmflGetters = found
+        return found
+
+    def _urmfl_name_of(node):
+        """The flag a test is, for true("x") and "x" in coll - else None."""
+
+        index = _urmfl_index()
+        if index is None:
+            return None
+        if isinstance(node, _urmi_ast.Call):
+            if not isinstance(node.func, _urmi_ast.Name) or not node.args:
+                return None
+            ok, word = _urmi_literal(node.args[0])
+            if not ok or not isinstance(word, _urmi_text):
+                return None
+            name = u'%s("%s")' % (node.func.id, word)
+            return name if name in index.flags else None
+        if isinstance(node, _urmi_ast.Compare) and len(node.ops) == 1 and \
+                isinstance(node.ops[0], (_urmi_ast.In, _urmi_ast.NotIn)):
+            ok, word = _urmi_literal(node.left)
+            coll = _urmi_name(node.comparators[0])
+            if not ok or not isinstance(word, _urmi_text) or coll is None:
+                return None
+            getter = _urmfl_getters(index).get(coll)
+            name = u'%s("%s")' % (getter, word) if getter else u'"%s" in %s' % (word, coll)
+            return name if name in index.flags else None
+        return None
+
+    def _urmfl_collection(rec):
+        try:
+            value = _urmp_ev(_urmp_parse(rec.coll))
+        except Exception:
+            return None
+        if value is _URMP_UNK:
+            return None
+        return value
+
+    def _urmfl_matches(rec, member):
+        if rec.attr:
+            return getattr(member, rec.attr, None) == rec.word
+        return member == rec.word
+
+    def urmfl_is_on(name):
+        """True / False, or None when the game has not made the collection yet."""
+
+        rec = _urmfl_record(name)
+        if rec is None:
+            return None
+        coll = _urmfl_collection(rec)
+        if coll is None:
+            return False
+        try:
+            if isinstance(coll, python_dict):
+                return bool(coll.get(rec.word))
+            for member in coll:
+                if _urmfl_matches(rec, member):
+                    return True
+            return False
+        except Exception:
+            return None
+
+    def _urmfl_object(rec):
+        """The object that stands for an object-kept flag, e.g. kim_mercy_path."""
+
+        for objname in rec.objects:
+            value = _urmp_value(objname)
+            if value is not _URMP_UNK and _urmfl_matches(rec, value):
+                return value
+        count = 0
+        for value in python_list(renpy.store.__dict__.values()):
+            count += 1
+            if count > 50000:
+                break
+            try:
+                if not callable(value) and getattr(value, rec.attr, None) == rec.word:
+                    return value
+            except Exception:
+                continue
+        return None
+
+    def urmfl_set(name, on):
+        rec = _urmfl_record(name)
+        if rec is None:
+            return
+        coll = _urmfl_collection(rec)
+        if coll is None:
+            renpy.notify("URM: %s does not exist in this save yet" % rec.coll)
+            return
+        current = urmfl_is_on(name)
+        try:
+            if on and not current:
+                member = rec.word
+                if rec.attr:
+                    member = _urmfl_object(rec)
+                    if member is None:
+                        renpy.notify("URM: could not find what stands for %s" % rec.word)
+                        return
+                if isinstance(coll, python_dict):
+                    coll[rec.word] = True
+                elif hasattr(coll, "add"):
+                    coll.add(member)
+                else:
+                    coll.append(member)
+            elif not on and current:
+                if isinstance(coll, python_dict):
+                    coll.pop(rec.word, None)
+                else:
+                    for member in python_list(coll):
+                        if _urmfl_matches(rec, member):
+                            coll.remove(member)
+        except Exception as error:
+            renpy.notify("URM: could not change %s (%s)" % (rec.word, error))
+            return
+        renpy.notify("URM: %s is now %s" % (rec.word, "ON" if on else "OFF"))
+        renpy.restart_interaction()
+
+    def urmfl_has():
+        return _urmfl_index() is not None
+
+    def urmfl_rows(text, limit=200):
+        """([(flag, word, on, what it is)], how many match) for the Flags screen."""
+
+        index = _urmfl_index()
+        rows = python_list()
+        if index is None:
+            return (rows, 0)
+        needle = (text or u"").strip().lower()
+        matched = 0
+        for name in sorted(index.flags, key=lambda n: index.flags[n].word.lower()):
+            rec = index.flags[name]
+            if needle and needle not in rec.word.lower() and needle not in name.lower():
+                continue
+            matched += 1
+            if len(rows) >= limit:
+                continue
+            reads = len(index.reads.get(name) or ())
+            writes = len(index.writes.get(name) or ())
+            info = u"checked in %d place%s, set in %d" % (reads, "" if reads == 1 else "s", writes)
+            rows.append((name, _urmi_safe(rec.word), urmfl_is_on(name), _urmi_safe(info)))
+        return (rows, matched)
+
+    class _URMFlagVar(python_object):
+        """What the variable panel needs from a variable, for a flag."""
+
+        isFlag = True
+        isEditable = True
+        varType = "boolean"
+
+        def __init__(self, name):
+            self.name = name
+            rec = _urmfl_record(name)
+            self.word = _urmi_safe(rec.word if rec else name)
+            if rec is None:
+                self.where = u""
+            elif rec.getter:
+                self.where = _urmi_safe(u"Kept in %s, tested with %s()" % (rec.coll, rec.getter))
+            else:
+                self.where = _urmi_safe(u"Kept in %s" % rec.coll)
+
+        @property
+        def value(self):
+            return urmfl_is_on(self.name)
+
+    def urmfl_var(name):
+        return _URMFlagVar(name)
+
+    def _urmfl_open(name):
+        if renpy.has_screen("urmfl_flag_dialog"):
+            renpy.show_screen("urmfl_flag_dialog", name=name)
+            renpy.restart_interaction()
+
+    config.hyperlink_handlers["URMFlag"] = _urmfl_open
+
+    import re as _urmfl_re
+    _URMFL_CALL = _urmfl_re.compile(
+        r"(\{color=[^{}]*\})?\b([A-Za-z_]\w*)(\{/color\})?"
+        r"\((\{color=[^{}]*\})?([\"'])([^\"'{}]*)\5(\{/color\})?\)")
+
+    def _urmfl_links(view, coloredCode):
+        """In the code view and on the path cards, true("x") opens the flag."""
+
+        index = _urmfl_index()
+        if index is None:
+            return coloredCode
+
+        def link(match):
+            name = u'%s("%s")' % (match.group(2), match.group(6))
+            if name not in index.flags:
+                return match.group()
+            return u"{a=URMFlag:%s}%s{/a}" % (name, match.group())
+
+        try:
+            return _URMFL_CALL.sub(link, coloredCode)
+        except Exception:
+            return coloredCode

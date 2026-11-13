@@ -1,5 +1,5 @@
 """
-Checks urm_compat.rpy - the one-file install - against URM's real archive.
+Checks urm_plus.rpy - the one-file install - against URM's real archive.
 
     <a game's bundled python> -I -B check_runtime.py <that game folder> <0x52_URM.rpa>
 
@@ -79,7 +79,7 @@ check("the file is plain ASCII apart from game_fixes.rpy's icons",
 
 folder = tempfile.mkdtemp(prefix="urm_check_runtime_")
 try:
-    path = os.path.join(folder, "urm_compat.rpy")
+    path = os.path.join(folder, "urm_plus.rpy")
     io.open(path, "w", encoding="utf-8", newline="\n").write(text)
     statements = renpy.parser.parse(path)
 finally:
@@ -152,7 +152,7 @@ class StoreRenpy(object):
 
 ns = {"renpy": StoreRenpy, "x52MF2": mf, "python_list": list, "python_set": set,
       "python_dict": dict, "__name__": "urm_runtime_check"}
-exec(compile(body, "urm_compat.rpy", "exec"), ns)
+exec(compile(body, "urm_plus.rpy", "exec"), ns)
 
 screens = sorted(n for n in contents if n.startswith("0x52-URM/screens/") and n.endswith(".x52"))
 for name in screens:

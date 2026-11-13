@@ -67,6 +67,7 @@ notes = []
 class StoreRenpy(object):
     Displayable = renpy.display.core.Displayable
     Render = renpy.display.render.Render
+    ast = renpy.ast
 
     def __init__(self):
         self.game = type("G", (), {})()
@@ -76,6 +77,9 @@ class StoreRenpy(object):
 
     def notify(self, text):
         notes.append(text)
+
+    def restart_interaction(self):
+        pass
 
 
 store_renpy = StoreRenpy()
@@ -92,6 +96,8 @@ class Config(object):
     hard_rollback_limit = 100
     rollback_length = 128
     interact_callbacks = []
+    skipping = None
+    after_load_callbacks = []
 
 
 config = Config()
@@ -99,6 +105,16 @@ x52 = type("X", (), {})()
 x52.Var = type("V", (), {})
 x52.Settings = Settings()
 x52.SettingsClass = type("SC", (), {"defaultValues": {}})
+
+
+class CancelSkipping(object):
+    """URM's own (utils.rpy:121)."""
+
+    def __call__(self):
+        config.skipping = None
+
+
+x52.CancelSkipping = CancelSkipping
 
 try:
     text_types = (str, unicode)  # noqa
@@ -192,5 +208,57 @@ ns["_urmr_apply"]()
 check("a game that asks for more keeps its own", (config.hard_rollback_limit, config.rollback_length), (5000, 6000))
 
 print()
+print("-- a skip that path detection stopped resumes on the next empty click")
+catcher = ns["urmr_middle_click"]
+UP = ns["_urmr_mouse_up"]
+IgnoreEvent = renpy.display.core.IgnoreEvent
+
+
+class Ev(object):
+    def __init__(self, kind, button):
+        self.type = kind
+        self.button = button
+
+
+def click(empty=True, button=1):
+    """True when the catcher took the click."""
+    ns["_urmr_empty_click"] = lambda: empty
+    try:
+        catcher.event(Ev(UP, button), 0, 0, 0)
+    except IgnoreEvent:
+        return True
+    return False
+
+
+config.skipping = "slow"
+x52.CancelSkipping()()
+check("URM's cancel on path detection still stops the skip", config.skipping, None)
+check("an empty-space click resumes it", (click(), config.skipping), (True, "slow"))
+config.skipping = None
+check("only once - the next click is an ordinary click", (click(), config.skipping), (False, None))
+
+config.skipping = "fast"
+x52.CancelSkipping()()
+check("a click on a button does not resume", (click(empty=False), config.skipping), (False, None))
+check("a fast skip to the next choice resumes as fast", (click(), config.skipping), (True, "fast"))
+
+config.skipping = "slow"
+x52.CancelSkipping()()
+config.skipping = None
+store_renpy.game.script = type("S", (), {"lookup": staticmethod(lambda name: renpy.ast.Menu.__new__(renpy.ast.Menu))})()
+store_renpy.game.context = lambda: type("C", (), {"current": "menu"})()
+ns["_urmr_forget_resume_at_menu"]()
+check("a choice menu forgets it", (click(), config.skipping), (False, None))
+
+config.skipping = None
+x52.CancelSkipping()()
+check("nothing to resume when no skip was running", (click(), config.skipping), (False, None))
+
+config.skipping = "slow"
+x52.CancelSkipping()()
+for callback in config.after_load_callbacks:
+    callback()
+check("loading a save forgets it", (click(), config.skipping), (False, None))
+
 print("all passed" if not failures else "%d FAILED" % len(failures))
 sys.exit(1 if failures else 0)

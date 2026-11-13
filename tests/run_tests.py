@@ -401,7 +401,7 @@ def main(argv):
             failures.append("the variable panel unit checks failed")
             print(out)
 
-        print("[7h] urm_compat.rpy patches URM's screens exactly as the archive build does")
+        print("[7h] urm_plus.rpy patches URM's screens exactly as the archive build does")
         result = subprocess.run(
             [python, "-I", "-B", os.path.join(HERE, "check_runtime.py"), game, rpa],
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=300)
@@ -432,6 +432,17 @@ def main(argv):
             print("    pass  (%d cases)" % out.count("pass  "))
         else:
             failures.append("the flag checks failed")
+            print(out)
+
+        print("[7k] skipping carries on past a small change")
+        result = subprocess.run(
+            [python, "-I", "-B", os.path.join(HERE, "check_skip.py"), game],
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=300)
+        out = result.stdout.decode("utf-8", "replace")
+        if result.returncode == 0:
+            print("    pass  (%d cases)" % out.count("pass  "))
+        else:
+            failures.append("the skip-past-small-changes checks failed")
             print(out)
 
         print("[7g] rollback goes back to the last choice, and further")

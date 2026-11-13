@@ -177,7 +177,11 @@ config = type("Config", (), {"hyperlink_handlers": {}, "interact_callbacks": [],
                              "after_load_callbacks": []})()
 ns = {"renpy": StoreRenpy(), "x52URM": X52URM(), "config": config,
       "python_dict": dict, "python_list": list, "python_set": set,
-      "python_object": object, "__name__": "urm_flags_check"}
+      "python_object": object,
+    # A Ren'Py 7 store's str is unicode (renpy.compat); literals parsed on
+    # Python 2 are byte strings. Run the blocks under the store's names.
+    "str": type(u""),  # STORE_STR
+    "__name__": "urm_flags_check"}
 
 for wanted in ("class _URMIndex", "def urm_checks", "def urm_panel", "def urmfl_set"):
     found = blocks(source, wanted)

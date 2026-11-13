@@ -747,6 +747,29 @@ tweak(
     new=_ROLLBACK_ROWS,
 )
 
+# Keep skipping past a small change - see "Keep skipping past a small change"
+# in game_fixes.rpy.
+_SKIP_TYPOS_ROWS = _ROLLBACK_ROWS + """
+                ('urmcSkipTypos', {
+                    'title': '{urm_notl}Skip past small changes{/urm_notl}',
+                    'description': \"\"\"When a game update fixes a typo or rewords a line, skipping stops on it although you have read the scene.\\n\\nWith this on, skipping carries on over up to this many new lines in a row when a line you have already seen comes right after them. More new lines than that in a row is new content, and skipping stops as usual.\"\"\",
+                    'effective': If(x52URM.Settings.get('urmcSkipTypos'), '{urm_notl}Up to ' + str(x52URM.Settings.get('urmcSkipTypos')) + ' lines{/urm_notl}', '{urm_notl}Off{/urm_notl}'),
+                    'options': {
+                        '{urm_notl}Off{/urm_notl}': 0,
+                        '{urm_notl}1 line{/urm_notl}': 1,
+                        '{urm_notl}2 lines{/urm_notl}': 2,
+                        '{urm_notl}3 lines{/urm_notl}': 3,
+                    },
+                }),"""
+
+tweak(
+    "keep skipping past a small change",
+    SCREENS + "options.rpy.x52",
+    check="urmcSkipTypos",
+    old=_ROLLBACK_ROWS,
+    new=_SKIP_TYPOS_ROWS,
+)
+
 _QUICKMENU_TOP = """screen URM_quickmenu:
     layer 'x52Overlay'
     style_prefix 'x52URM'
@@ -1219,6 +1242,31 @@ _MIDDLE_CLICK = """screen urmr_middle():
 # game_fixes.rpy). The dialog is URM's own editor shape: what the flag is, an
 # ON/OFF switch, and the variable panel under it. The list is opened from the
 # Flags button beside Search.
+# Ignore a variable in one click, from the dialog every variable opens in.
+# URM's VarsStore.ignore() remembers the variable itself, so the old route -
+# Remember, open URM, Variables, the ignore column - is not needed for it.
+
+_EDITOR_WATCH = """                    else:
+                        use x52URM_iconButton('\\ue8f4', '{urm_notl}Watch{/urm_notl}', Show('URM_remember_var', varName=var.name, rememberType='watchVar'))"""
+
+tweak(
+    "ignore a variable in path detection or the code view from its dialog",
+    SCREENS + "vars.rpy.x52",
+    check="VarsStore.isIgnored(var.name",
+    old=_EDITOR_WATCH,
+    new=_EDITOR_WATCH + """
+                    # Ignore (path detection / code view)
+                    if x52URM.VarsStore.isIgnored(var.name, 'path'):
+                        use x52URM_iconButton('\\ueb80', '{urm_notl}Unignore in paths{/urm_notl}', Function(x52URM.VarsStore.unignore, var.name, 'path'))
+                    else:
+                        use x52URM_iconButton('\\ue065', '{urm_notl}Ignore in paths{/urm_notl}', Function(x52URM.VarsStore.ignore, var.name, 'path'))
+                    if x52URM.VarsStore.isIgnored(var.name, 'code'):
+                        use x52URM_iconButton('\\ue4f3', '{urm_notl}Unignore in code{/urm_notl}', Function(x52URM.VarsStore.unignore, var.name, 'code'))
+                    else:
+                        use x52URM_iconButton('\\ue86f', '{urm_notl}Ignore in code{/urm_notl}', Function(x52URM.VarsStore.ignore, var.name, 'code'))""",
+)
+
+
 _FLAG_SCREENS = """screen urmfl_flag_dialog(name):
     layer 'x52Overlay'
     style_prefix 'x52URM'

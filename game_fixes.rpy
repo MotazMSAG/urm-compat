@@ -191,9 +191,13 @@ init 999 python:
     # Ren'Py 7 runs on Python 2, where a theme colour may be a unicode rather
     # than a str. Checking against str alone would reject every colour there
     # and quietly drop the markers back to plain text.
+    # Inside a Ren'Py 7 store, `str` is Ren'Py's compat str - unicode - but
+    # Python 2's parser hands back string literals as byte strings. So text
+    # types come from the real builtins, never from the store's names.
     try:
-        _URM_TEXT = (str, unicode)
-    except NameError:
+        import __builtin__ as _urm_builtins
+        _URM_TEXT = (_urm_builtins.str, _urm_builtins.unicode)
+    except ImportError:
         _URM_TEXT = (str,)
 
     def _urm_hex(value):
@@ -1266,7 +1270,7 @@ init 999 python:
         _urmc_ready = True
     except Exception as error:
         _urmc_ready = False
-        print("0x52-URM compat: leaving search as it ships (%s)" % (error,))
+        print("URM+: leaving search as it ships (%s)" % (error,))
 
 
     def _urmc_maxDepth(search=None):
@@ -1696,7 +1700,7 @@ init 999 python:
         _urmc_defaults.setdefault("urmcSearchDepth", 1)
         _urmc_defaults.setdefault("quickmenuBtnSkipUnseen", False)
     except Exception as error:
-        print("0x52-URM compat: could not register settings (%s)" % (error,))
+        print("URM+: could not register settings (%s)" % (error,))
 
 
     if _urmc_ready:
@@ -1716,7 +1720,7 @@ init 999 python:
             _urmc_installed = True
 
         except Exception as error:
-            print("0x52-URM compat: search upgrades not installed (%s)"
+            print("URM+: search upgrades not installed (%s)"
                   % (error,))
 
 
@@ -2075,7 +2079,7 @@ init 999 python:
         # do with search.
         x52URM.SettingsClass.defaultValues.setdefault("urmcLookAhead", 20)
     except Exception as error:
-        print("0x52-URM compat: could not register urmcLookAhead (%s)" % (error,))
+        print("URM+: could not register urmcLookAhead (%s)" % (error,))
 
     try:
         # children carries the same dead cache guard as varType - hasattr on a
@@ -2105,13 +2109,13 @@ init 999 python:
 
         x52URM.Var.children = property(_urmc_children_get)
     except Exception as error:
-        print("0x52-URM compat: children left uncached (%s)" % (error,))
+        print("URM+: children left uncached (%s)" % (error,))
 
     try:
         x52URM.PathDetectionClass.lookAheadLimit = property(
             lambda self: _urmc_lookahead())
     except Exception as error:
-        print("0x52-URM compat: look-ahead left at 20 (%s)" % (error,))
+        print("URM+: look-ahead left at 20 (%s)" % (error,))
 
     try:
         _urmc_orig_labels = x52URM.CodeViewClass.interactiveLabels
@@ -2122,7 +2126,7 @@ init 999 python:
 
         x52URM.CodeViewClass.interactiveLabels = _urmc_interactiveLabels
     except Exception as error:
-        print("0x52-URM compat: python jumps left unlinked (%s)" % (error,))
+        print("URM+: python jumps left unlinked (%s)" % (error,))
 
     try:
         _urmc_orig_vars = x52URM.CodeViewClass.interactiveVariables
@@ -2138,7 +2142,7 @@ init 999 python:
 
         x52URM.CodeViewClass.interactiveVariables = _urmc_interactiveVariables
     except Exception as error:
-        print("0x52-URM compat: bare names left unlinked (%s)" % (error,))
+        print("URM+: bare names left unlinked (%s)" % (error,))
 
 # ---------------------------------------------------------------------------
 # The script index: what this game checks, what it sets, and where
@@ -2185,9 +2189,13 @@ init 999 python:
 
     import ast as _urmi_ast
 
+    # Inside a Ren'Py 7 store, `str` is Ren'Py's compat str - unicode - but
+    # Python 2's parser hands back string literals as byte strings. So text
+    # types come from the real builtins, never from the store's names.
     try:
-        _urmi_text = (str, unicode)
-    except NameError:
+        import __builtin__ as _urm_builtins
+        _urmi_text = (_urm_builtins.str, _urm_builtins.unicode)
+    except ImportError:
         _urmi_text = (str,)
 
     # Constant node kinds across Python 2, 3.4-3.7 and 3.8+. Missing ones are
@@ -2451,6 +2459,9 @@ init 999 python:
 
             self.parent = python_dict()  # id(node) -> (parent node, kind, extra)
             self.labels = python_dict()  # label name -> Label node
+            # id(node) -> the one statement whose .next it is, or None when
+            # several lead to it (the statement after an if or a menu)
+            self.prev = python_dict()
             # filename -> (sorted lines, names): the label a line falls under,
             # for scripts whose label bodies are not indented under the label
             self.label_lines = python_dict()
@@ -2769,6 +2780,19 @@ init 999 python:
                     try:
                         self._link(node)
 
+                        # Dialogue in a translation block chains as
+                        # Translate -> Say -> EndTranslate -> next Translate
+                        # (Ren'Py 7.5). An engine whose Translate points past
+                        # its own block would give the EndTranslate two
+                        # predecessors; that link is left out so the chain
+                        # stays a single line either way.
+                        after = getattr(node, "next", None)
+                        if after is not None and not (
+                                isinstance(node, renpy.ast.Translate) and node.block
+                                and after is not node.block[0]):
+                            key = id(after)
+                            self.prev[key] = None if key in self.prev else node
+
                         if isinstance(node, LABEL):
                             name = getattr(node, "name", None)
                             if isinstance(name, _urmi_text):
@@ -2821,7 +2845,7 @@ init 999 python:
                 try:
                     self._flags()
                 except Exception as error:
-                    print("0x52-URM compat: flags not indexed (%s)" % (error,))
+                    print("URM+: flags not indexed (%s)" % (error,))
 
                 total = 0
                 for bucket in self.reads.values():
@@ -3098,7 +3122,7 @@ init 999 python:
     try:
         _urmi_start()
     except Exception as error:
-        print("0x52-URM compat: script index not started (%s)" % (error,))
+        print("URM+: script index not started (%s)" % (error,))
 
 
     # ------------------------------------------------------------------
@@ -5790,18 +5814,26 @@ init 999 python:
         r"galler|replay|memor|album|recollect|bonus|extra|(?:^|_)cgs?(?:$|_)"
         r"|scene_?(?:select|list|menu|room|viewer)", _urmg_re.I)
     _URMG_LABELS = _urmg_re.compile(r"galler|replay|memor|album|recollect|bonus|extras", _urmg_re.I)
+    # Thief of Hearts 2 shows scr_end_replay during a replay; counting it would
+    # unlock flags inside the replayed scene itself. URM's own URM_replay
+    # dialogs are not the game's gallery either.
+    _URMG_NOT_SCREENS = _urmg_re.compile(r"end_?replay|replay_?end|exit|^urm", _urmg_re.I)
     _URMG_PERSISTENT = _urmg_re.compile(r"persistent\.([A-Za-z_]\w*)")
 
+    # Inside a Ren'Py 7 store, `str` is Ren'Py's compat str - unicode - but
+    # Python 2's parser hands back string literals as byte strings. So text
+    # types come from the real builtins, never from the store's names.
     try:
-        _urmg_strings = (str, unicode)
-    except NameError:
+        import __builtin__ as _urm_builtins
+        _urmg_strings = (_urm_builtins.str, _urm_builtins.unicode)
+    except ImportError:
         _urmg_strings = (str,)
 
     try:
         x52URM.SettingsClass.defaultValues.setdefault("urmcGalleryAll", False)
         x52URM.SettingsClass.defaultValues.setdefault("urmcGalleryBadge", True)
     except Exception as error:
-        print("0x52-URM compat: gallery settings not registered (%s)" % (error,))
+        print("URM+: gallery settings not registered (%s)" % (error,))
 
     class _URMGState(python_object):
         def __init__(self):
@@ -5809,6 +5841,7 @@ init 999 python:
             self.names = python_set()      # persistent names the gallery screens/labels test
             self.screens = python_list()   # the game's gallery screens, by name
             self.wanted = python_dict()    # name -> bool, cached
+            self.unlock = python_dict()    # name -> the value that means unlocked
             self.labels = python_dict()    # current statement -> inside a gallery label?
             self.originals = python_dict() # (module id, function name) -> original
             self.scanned = False
@@ -5842,12 +5875,8 @@ init 999 python:
             return False
         if getattr(ctx, "_menu", False):
             return True
-        for name in st.screens[:12]:
-            try:
-                if renpy.get_screen(name):
-                    return True
-            except Exception:
-                pass
+        if _urmg_gallery_showing():
+            return True
         current = getattr(ctx, "current", None)
         if current is None:
             return False
@@ -5868,6 +5897,72 @@ init 999 python:
             st.labels.clear()
         st.labels[current] = inside
         return inside
+
+    def _urmg_in_init(index, site):
+        """A write in startup code (init / default), not one the story makes."""
+
+        cur = index.nodes.get(site[2])
+        guard = 0
+        while cur is not None and guard < 200:
+            guard += 1
+            link = index.parent.get(id(cur))
+            if link is None:
+                break
+            parent, kind, _extra = link
+            if isinstance(parent, renpy.ast.Init):
+                return True
+            if kind == "label":
+                return False
+            cur = parent
+        return index.label_at(site[0], site[1]) is None
+
+    def _urmg_unlock_value(name):
+        """
+        The value that means "unlocked" for one persistent flag.
+
+        Most galleries test `if persistent.x:` and the scene sets it True, but
+        Thief of Hearts 2 tests `persistent.replay_x == False` and its scenes
+        set False (True is written at startup, meaning locked). So the value
+        is learnt from what the story itself writes when the scene is earned -
+        writes outside init code - and True is only the fallback for a flag
+        the script never writes.
+        """
+
+        st = _urmg_state()
+        try:
+            return st.unlock[name]
+        except KeyError:
+            pass
+        index = _urmi_index()
+        if index is None or index.state != "ready":
+            return True
+        counts = python_dict()
+        try:
+            for site, op, value, _t in index.writes.get("persistent." + name) or ():
+                if op != "=" or not isinstance(value, bool):
+                    continue
+                if _urmg_in_init(index, site):
+                    continue
+                counts[value] = counts.get(value, 0) + 1
+        except Exception:
+            counts = python_dict()
+        if not counts:
+            unlocked = True
+        elif len(counts) == 1:
+            unlocked = python_list(counts)[0]
+        else:
+            unlocked = counts.get(True, 0) >= counts.get(False, 0)
+        st.unlock[name] = unlocked
+        return unlocked
+
+    def _urmg_gallery_showing():
+        for name in _urmg_state().screens[:12]:
+            try:
+                if renpy.get_screen(name):
+                    return True
+            except Exception:
+                pass
+        return False
 
     def _urmg_is_wanted(name):
         st = _urmg_state()
@@ -5967,11 +6062,13 @@ init 999 python:
         except AttributeError:
             # Never set: the game's own Persistent.__getattr__ would say None.
             if _urmg_is_wanted(name) and _urmg_active():
-                return True
+                return _urmg_unlock_value(name)
             raise
-        if value is False or value is None:
+        if value is True or value is False or value is None:
             if _urmg_is_wanted(name) and _urmg_active():
-                return True
+                unlocked = _urmg_unlock_value(name)
+                if value is not unlocked:
+                    return unlocked
         elif isinstance(value, (python_set, frozenset, python_list, python_dict)):
             if _urmg_is_wanted(name) and _urmg_active():
                 return _urmg_wrap(value)
@@ -6049,6 +6146,8 @@ init 999 python:
                 name = key[0] if isinstance(key, tuple) else key
                 if not isinstance(name, _urmg_strings) or not _URMG_SCREENS.search(name):
                     continue
+                if _URMG_NOT_SCREENS.search(name):
+                    continue
                 if name not in screens:
                     screens.append(name)
                 ast = getattr(screen, "ast", None)
@@ -6089,7 +6188,7 @@ init 999 python:
                         if check is not None and not hasattr(check, "_urmg_original"):
                             cls.check_unlock = _urmg_check_wrapper(check)
         except Exception as error:
-            print("0x52-URM compat: Gallery class left as is (%s)" % (error,))
+            print("URM+: Gallery class left as is (%s)" % (error,))
 
         for name in python_list(names):
             if name.startswith("_") or "urm" in name.lower():
@@ -6097,7 +6196,11 @@ init 999 python:
         st.names = names
         st.screens = screens
         st.wanted = python_dict()
-        st.scanned = True
+        st.unlock = python_dict()
+        # Done for good only once the script has been read: the names gallery
+        # labels test come from the index, so a scan before that runs again.
+        index = _urmi_index()
+        st.scanned = index is not None and index.state == "ready"
 
     def _urmg_modules():
         found = python_list()
@@ -6120,7 +6223,7 @@ init 999 python:
         try:
             type(renpy.game.persistent).__getattribute__ = _urmg_getattribute
         except Exception as error:
-            print("0x52-URM compat: persistent gallery flags not unlocked (%s)" % (error,))
+            print("URM+: persistent gallery flags not unlocked (%s)" % (error,))
         for mod in _urmg_modules():
             for fname in ("seen_label", "seen_image", "seen_audio"):
                 current = getattr(mod, fname, None)
@@ -6156,7 +6259,7 @@ init 999 python:
         try:
             x52URM.Settings.set("urmcGalleryAll", not _urmg_setting("urmcGalleryAll"))
         except Exception as error:
-            print("0x52-URM compat: gallery switch failed (%s)" % (error,))
+            print("URM+: gallery switch failed (%s)" % (error,))
         _urmg_apply()
         renpy.restart_interaction()
 
@@ -6171,8 +6274,15 @@ init 999 python:
         except Exception:
             pass
         try:
-            in_menu = getattr(renpy.game.context(), "_menu", False)
-            want = bool(in_menu and _urmg_setting("urmcGalleryBadge") is not False
+            st = _urmg_state()
+            if not st.scanned:
+                index = _urmi_index()
+                if index is not None and index.state == "ready":
+                    _urmg_scan()
+            # Ren'Py's menus, or one of the game's own gallery screens - Thief
+            # of Hearts 2 opens its gallery from an in-game menu screen.
+            where = getattr(renpy.game.context(), "_menu", False) or _urmg_gallery_showing()
+            want = bool(where and _urmg_setting("urmcGalleryBadge") is not False
                         and renpy.has_screen("urmg_badge"))
             shown = renpy.get_screen("urmg_badge", layer=_urmi_layer)
             if want and not shown:
@@ -6219,13 +6329,14 @@ init 999 python:
     try:
         x52URM.SettingsClass.defaultValues.setdefault("urmcRollback", 500)
     except Exception as error:
-        print("0x52-URM compat: rollback setting not registered (%s)" % (error,))
+        print("URM+: rollback setting not registered (%s)" % (error,))
 
     class _URMRState(python_object):
         def __init__(self):
             self.game_hard = None
             self.game_length = None
             self.applied = None
+            self.resume = None             # the skip path detection stopped
 
     def _urmr_state():
         holder = x52URM.Var
@@ -6261,6 +6372,10 @@ init 999 python:
     def _urmr_interact():
         try:
             _urmr_apply()
+        except Exception:
+            pass
+        try:
+            _urmr_forget_resume_at_menu()
         except Exception:
             pass
 
@@ -6330,13 +6445,30 @@ init 999 python:
         return False
 
     class _URMRMiddleClick(renpy.Displayable):
-        """Takes a middle click on a Skip button, and nothing else."""
+        """
+        Two mouse jobs, from the top layer so nothing below sees them first:
+
+        * a middle click on a Skip button rolls back to the last choice
+        * after URM stopped a skip on path detection, the next left click on
+          empty space resumes that skip (see _urmr_cancel_skipping)
+        """
 
         def render(self, width, height, st, at):
             return renpy.Render(0, 0)
 
         def event(self, ev, x, y, st):
-            if getattr(ev, "type", None) == _urmr_mouse_up and getattr(ev, "button", None) == 2:
+            kind = getattr(ev, "type", None)
+            button = getattr(ev, "button", None)
+            if kind == _urmr_mouse_up and button == 1:
+                state = _urmr_state()
+                if state.resume and not config.skipping and _urmr_empty_click():
+                    config.skipping = state.resume
+                    state.resume = None
+                    renpy.restart_interaction()
+                    # Taken, not passed on: the dialogue's own click handler
+                    # stops skipping when it sees a click while skipping.
+                    raise _urmr_sys.modules["renpy.display.core"].IgnoreEvent()
+            elif kind == _urmr_mouse_up and button == 2:
                 if _urmr_skip_focused():
                     urmr_back_to_choice()
                     raise _urmr_sys.modules["renpy.display.core"].IgnoreEvent()
@@ -6347,6 +6479,60 @@ init 999 python:
     except Exception:
         import pygame as _urmr_pygame
     _urmr_mouse_up = _urmr_pygame.MOUSEBUTTONUP
+
+    def _urmr_empty_click():
+        """No button under the mouse: the click is one that advances dialogue."""
+
+        try:
+            focus = _urmr_sys.modules["renpy.display.focus"].get_focused()
+        except Exception:
+            return False
+        return focus is None or type(focus).__name__ == "SayBehavior"
+
+
+    # ------------------------------------------------------------------
+    # Resume a skip that path detection stopped
+    # ------------------------------------------------------------------
+    #
+    # With "Stop skipping on path detection" on, URM cancels the skip the
+    # moment a path card appears (watchpanel.rpy.x52:310-311, CancelSkipping
+    # in utils.rpy:121). Clicking on then only advances one line at a time.
+    # The skip URM cancelled - slow, or fast to the next choice - is
+    # remembered here, and the next left click on empty space picks it up
+    # again. A click on a button does not, a choice menu forgets it (Ren'Py
+    # stops skipping there anyway), and so does loading a save.
+
+    def _urmr_cancel_skipping_wrap(original):
+        def cancel(self, *args, **kwargs):
+            if config.skipping:
+                _urmr_state().resume = config.skipping
+            return original(self, *args, **kwargs)
+        cancel._urmr_original = original
+        return cancel
+
+    try:
+        _urmr_cancel = x52URM.CancelSkipping.__call__
+        if not hasattr(_urmr_cancel, "_urmr_original"):
+            x52URM.CancelSkipping.__call__ = _urmr_cancel_skipping_wrap(_urmr_cancel)
+    except Exception as error:
+        print("URM+: skipping will not resume after path detection (%s)" % (error,))
+
+    def _urmr_forget_resume_at_menu():
+        state = _urmr_state()
+        if not state.resume:
+            return
+        try:
+            node = renpy.game.script.lookup(renpy.game.context().current)
+        except Exception:
+            return
+        if isinstance(node, renpy.ast.Menu):
+            state.resume = None
+
+    def _urmr_forget_resume():
+        _urmr_state().resume = None
+
+    if _urmr_forget_resume not in config.after_load_callbacks:
+        config.after_load_callbacks.append(_urmr_forget_resume)
 
     urmr_middle_click = _URMRMiddleClick()
 
@@ -6420,7 +6606,7 @@ init 999 python:
             _urmf_execute._urmf = True
             renpy.ast.If.execute = _urmf_execute
     except Exception as error:
-        print("0x52-URM compat: paths behind a jump stay unforceable (%s)" % (error,))
+        print("URM+: paths behind a jump stay unforceable (%s)" % (error,))
 
     def _urmf_forget():
         _urmf_state().pending = python_list()
@@ -6473,7 +6659,7 @@ init 999 python:
 
         x52URM.Path.Action = property(_urmf_action_get)
     except Exception as error:
-        print("0x52-URM compat: Select stays off for paths behind a jump (%s)" % (error,))
+        print("URM+: Select stays off for paths behind a jump (%s)" % (error,))
 
 
 # ---------------------------------------------------------------------------
@@ -6714,3 +6900,198 @@ init 999 python:
             return _URMFL_CALL.sub(link, coloredCode)
         except Exception:
             return coloredCode
+
+
+# ---------------------------------------------------------------------------
+# Keep skipping past a small change - a typo fix, a reworded line
+# ---------------------------------------------------------------------------
+#
+# A developer who fixes a typo gives that line a new identity, so a player who
+# has read the scene before is stopped by a skip on one changed line. Ren'Py
+# decides "seen" in one place, Context.seen_current (execution.py:888), asked
+# by the say statement and the dialogue's skip handling for both slow and fast
+# skip (behavior.py:814, character.py:483 and :536).
+#
+# While skipping, an unseen line now counts as seen when it is one of at most
+# N unseen lines sitting between seen lines - a seen line before them in the
+# same passage, and one after them - so N new lines in a row are skipped and
+# N+1 stop the skip as before:
+#
+#     seen  new  new  new  seen         -> keeps skipping (N = 3)
+#     seen  new  new  new  new  seen    -> stops
+#
+# The look-ahead follows the script the way it will run: through jumps, into
+# calls, and down the if-branch whose condition is true now. A choice menu, a
+# return or anything it cannot follow ends it as "not a small change", so new
+# content still stops the skip. The look back stays inside the passage: a short
+# reply to a choice the player never made starts a block of its own and still
+# stops the skip. Only while skipping; reading is untouched.
+
+init 999 python:
+
+    import sys as _urms_sys
+
+    try:
+        x52URM.SettingsClass.defaultValues.setdefault("urmcSkipTypos", 3)
+    except Exception as error:
+        print("URM+: skip-past-small-changes setting not registered (%s)" % (error,))
+
+    _URMS_WALK = 400
+
+    def _urms_limit():
+        try:
+            value = x52URM.Settings.get("urmcSkipTypos")
+        except Exception:
+            value = None
+        if value is None:
+            return 3
+        try:
+            return int(value)
+        except Exception:
+            return 0
+
+    def _urms_lookup(name):
+        try:
+            return renpy.game.script.lookup(name)
+        except Exception:
+            return None
+
+    def _urms_next(node):
+        """The statement that runs after `node`, or None where it cannot be told."""
+
+        ast = renpy.ast
+        if isinstance(node, ast.Translate):
+            return node.block[0] if node.block else node.next
+        if isinstance(node, ast.Jump):
+            if getattr(node, "expression", False):
+                return None
+            return _urms_lookup(node.target)
+        if isinstance(node, ast.Call):
+            if getattr(node, "expression", False):
+                return None
+            return _urms_lookup(node.label)
+        if isinstance(node, (ast.Menu, ast.Return, ast.While)):
+            return None
+        if isinstance(node, ast.If):
+            for cond, block in node.entries:
+                try:
+                    taken = renpy.python.py_eval(cond)
+                except Exception:
+                    return None
+                if taken:
+                    return block[0] if block else node.next
+            return node.next
+        if isinstance(node, ast.Label):
+            return node.block[0] if getattr(node, "block", None) else node.next
+        return getattr(node, "next", None)
+
+    def _urms_line(node):
+        """The dialogue line a statement is, or None."""
+
+        return node if isinstance(node, renpy.ast.Say) else None
+
+    # Statements a line can sit next to without leaving its passage.
+    def _urms_passes(node):
+        ast = renpy.ast
+        kinds = python_list()
+        for name in ("Translate", "EndTranslate", "Show", "Scene", "Hide", "With", "Python",
+                     "Pass", "UserStatement", "ShowLayer", "Camera"):
+            cls = getattr(ast, name, None)
+            if cls is not None:
+                kinds.append(cls)
+        return isinstance(node, tuple(kinds))
+
+    def _urms_back(index, node):
+        """The statement before `node` in the same passage, or None at its start."""
+
+        return index.prev.get(id(node))
+
+    def _urms_small_change(current, limit):
+        """
+        True when `current` is one of at most `limit` unseen lines sitting
+        between seen lines: a seen line before them in the same passage, and a
+        seen line after them on the way the game will run.
+
+        The line before must be in the same passage - not across a menu option
+        or an if-branch - because a short reply to a choice the player never
+        made also sits between seen lines, after the menu and before the merge.
+        A typo fix sits inside text already read; a new reply starts its own
+        block, with nothing before it there.
+        """
+
+        index = _urmi_index()
+        if index is None or index.state != "ready" or not getattr(index, "prev", None):
+            return False
+
+        cache = getattr(x52URM.Var, "_urmsCache", None)
+        if cache is None or len(cache) > 500:
+            cache = python_dict()
+            x52URM.Var._urmsCache = cache
+        key = (current, limit)
+        if key in cache:
+            return cache[key]
+
+        result = False
+        node = _urms_lookup(current)
+        seen = renpy.game.persistent._seen_ever
+        if isinstance(node, renpy.ast.Say):
+            unseen = 1
+
+            # Backwards, inside this passage, to a seen line.
+            before = False
+            walk = _urms_back(index, node)
+            steps = 0
+            while walk is not None and steps < _URMS_WALK and unseen <= limit:
+                steps += 1
+                line = _urms_line(walk)
+                if line is not None:
+                    if line.name in seen:
+                        before = True
+                        break
+                    unseen += 1
+                elif not _urms_passes(walk):
+                    break
+                walk = _urms_back(index, walk)
+
+            # Forwards, the way the game will run, to a seen line.
+            if before and unseen <= limit:
+                walk = _urms_next(node)
+                steps = 0
+                while walk is not None and steps < _URMS_WALK:
+                    steps += 1
+                    if isinstance(walk, renpy.ast.Say):
+                        if walk.name in seen:
+                            result = True
+                            break
+                        unseen += 1
+                        if unseen > limit:
+                            break
+                    walk = _urms_next(walk)
+        cache[key] = result
+        return result
+
+    try:
+        _urms_context = _urms_sys.modules["renpy.execution"].Context
+        _urms_original = _urms_context.seen_current
+        # The plain function: on Python 2 the unbound method insists on a real
+        # Context as self, which a test's stand-in is not.
+        _urms_original = getattr(_urms_original, "__func__", _urms_original)
+
+        def _urms_seen_current(self, ever):
+            if _urms_original(self, ever):
+                return True
+            if not ever or not config.skipping:
+                return False
+            limit = _urms_limit()
+            if limit <= 0:
+                return False
+            try:
+                return _urms_small_change(self.current, limit)
+            except Exception:
+                return False
+
+        if not getattr(_urms_original, "_urms", False):
+            _urms_seen_current._urms = True
+            _urms_context.seen_current = _urms_seen_current
+    except Exception as error:
+        print("URM+: skipping still stops on small changes (%s)" % (error,))

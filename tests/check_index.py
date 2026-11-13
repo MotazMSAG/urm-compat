@@ -157,6 +157,9 @@ ns = {
     "x52URM": X52URM(),
     "python_dict": dict, "python_list": list,
     "python_set": set, "python_object": object,
+    # A Ren'Py 7 store's str is unicode (renpy.compat); literals parsed on
+    # Python 2 are byte strings. Run the blocks under the store's names.
+    "str": type(u""),  # STORE_STR
     "__name__": "urm_index_check",
 }
 

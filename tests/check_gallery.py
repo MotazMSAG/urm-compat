@@ -68,6 +68,10 @@ screen my_gallery():
         text "Kim"
     if "b" in persistent.masterreplist["Jill"]:
         text persistent.replay_hints.get("b")
+    if persistent.replay_earned == False:
+        text "Earned"
+    if persistent.replay_unearned == False:
+        text "Unearned"
 '''
 
 
@@ -139,6 +143,10 @@ persistent.kimscene_done = None          # odd name, but the gallery screen test
 persistent.gallery = {"kim": False, "ann": True}
 persistent.unlocked_scenes = ["intro"]
 persistent.music_volume_set = False      # a setting, never touched
+# Thief of Hearts 2: False means unlocked. Startup code writes True (locked),
+# the scene itself writes False when it is earned.
+persistent.replay_earned = False
+persistent.replay_unearned = True
 persistent.chapter = 0                   # a number, never touched
 persistent.masterreplist = {"Jill": ["a"]}   # The Lost Guardian: a list per girl
 persistent.replay_hints = {"a": "hint"}      # tooltips: never invent one
@@ -159,13 +167,31 @@ class StoreRenpy(object):
         return getattr(exports, name)
 
 
+class FakeIndex(object):
+    """Just what the switch asks the script index: who writes a flag, where."""
+    state = "ready"
+    nodes = {}
+    parent = {}
+    writes = {}
+    for _flag in ("persistent.replay_earned", "persistent.replay_unearned"):
+        writes[_flag] = [(("game/gallery.rpy", 2, 1), "=", True, None),     # init: locked
+                         (("game/story.rpy", 40, 2), "=", False, None)]     # the scene: earned
+
+    @staticmethod
+    def label_at(filename, line):
+        return "lb_scene" if filename == "game/story.rpy" else None
+
+
 ns = {
     "renpy": StoreRenpy(),
     "x52URM": x52,
     "config": type("Config", (), {"interact_callbacks": []})(),
     "python_dict": dict, "python_list": list,
     "python_set": set, "python_object": object,
-    "_urmi_index": lambda: None,
+    # A Ren'Py 7 store's str is unicode (renpy.compat); literals parsed on
+    # Python 2 are byte strings. Run the blocks under the store's names.
+    "str": type(u""),  # STORE_STR
+    "_urmi_index": lambda: FakeIndex,
     "_urmi_layer": "overlay",
     "__name__": "urm_gallery_check",
 }
@@ -202,11 +228,12 @@ def reads():
             persistent.chapter, exports.seen_label("ending_scene"),
             "b" in persistent.masterreplist["Jill"],
             "x" in persistent.masterreplist.get("Nobody", ()),
-            persistent.replay_hints.get("b"), persistent.replay_hints.get("a"))
+            persistent.replay_hints.get("b"), persistent.replay_hints.get("a"),
+            persistent.replay_earned, persistent.replay_unearned)
 
 
-REAL = (False, None, None, False, False, False, 0, False, False, False, None, "hint")
-ALL = (True, True, True, True, True, False, 0, True, True, True, None, "hint")
+REAL = (False, None, None, False, False, False, 0, False, False, False, None, "hint", False, True)
+ALL = (True, True, True, True, True, False, 0, True, True, True, None, "hint", False, False)
 
 print("-- switched off")
 check("everything reads as stored", reads(), REAL)
